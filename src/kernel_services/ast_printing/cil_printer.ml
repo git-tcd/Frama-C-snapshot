@@ -575,6 +575,13 @@ class cil_printer () = object (self)
   method location fmt loc =
     Format.fprintf fmt "%a" Filepath.pp_pos (fst loc)
 
+  method private location' fmt loc =
+    let pp_pos fmt pos =
+      Format.fprintf fmt "%d %d %d" pos.Filepath.pos_lnum pos.Filepath.pos_bol pos.Filepath.pos_cnum in
+    Format.fprintf fmt "\"%a\"" Filepath.Normalized.pretty (fst loc).Filepath.pos_path;
+    Format.fprintf fmt " %a" pp_pos (fst loc);
+    Format.fprintf fmt " %a" pp_pos (snd loc)
+
   (* constant *)
   method constant fmt = function
     | CInt64(_, _, Some s) when print_as_source s ->
@@ -1579,6 +1586,13 @@ class cil_printer () = object (self)
 
   (*** GLOBALS ***)
   method global fmt (g:global) =
+    let line_directive0 tit fmt l =
+      fprintf fmt "@\n/*@@ frama_c_cil \\<open>%s\\<close> %a */@\n" tit self#location' l;
+    in
+    let line_directive ?(forcefile=false) tit fmt l =
+      line_directive0 tit fmt l;
+      self#line_directive ~forcefile fmt l
+    in
     if print_global g then
       match g with
       | GFun (fundec, l) ->
@@ -1598,20 +1612,20 @@ class cil_printer () = object (self)
              (* Temporarily remove the function attributes *)
              fundec.svar.vattr <- [];
              (* Body now *)
-             self#line_directive ~forcefile:true fmt l;
+             line_directive ~forcefile:true ("GFun \"" ^ fundec.svar.vname ^ "\"") fmt l;
              self#fundecl fmt fundec;
              fundec.svar.vattr <- oldattr) ;
         fprintf fmt "@\n";
         self#out_current_function
 
       | GType (typ, l) ->
-        self#line_directive ~forcefile:true fmt l;
+        line_directive ~forcefile:true "GType" fmt l;
         fprintf fmt "%a %a;@\n"
           self#pp_keyword "typedef"
           (self#typ (Some (fun fmt -> self#varname fmt typ.tname))) typ.ttype
 
       | GEnumTag (enum, l) ->
-        self#line_directive fmt l;
+        line_directive "GEnumTag" fmt l;
         if verbose then
           fprintf fmt "/* Following enum is equivalent to %a */@\n"
             (self#typ None)
@@ -1628,7 +1642,7 @@ class cil_printer () = object (self)
           self#attributes enum.eattr
 
       | GEnumTagDecl (enum, l) -> (* This is a declaration of a tag *)
-        self#line_directive fmt l;
+        line_directive "GEnumTagDecl" fmt l;
         fprintf fmt "%a %a;@\n"
           self#pp_keyword "enum"
           self#varname enum.ename
@@ -1637,7 +1651,7 @@ class cil_printer () = object (self)
         let n = comp.cname in
         let su = if comp.cstruct then "struct" else "union" in
         let sto_mod, rest_attr = Cil.separateStorageModifiers comp.cattr in
-        self#line_directive ~forcefile:true fmt l;
+        line_directive ~forcefile:true "GCompTag" fmt l;
         fprintf fmt "@[<3>%a%a %a {@\n%a@]@\n}%a;@\n"
           self#pp_keyword su
           self#attributes sto_mod
@@ -1647,12 +1661,12 @@ class cil_printer () = object (self)
           self#attributes rest_attr
 
       | GCompTagDecl (comp, l) -> (* This is a declaration of a tag *)
-        self#line_directive fmt l;
+        line_directive "GCompTagDecl" fmt l;
         fprintf fmt "%a %a;@\n"
           self#pp_keyword (if comp.cstruct then "struct" else "union")
           self#varname comp.cname
       | GVar (vi, io, l) ->
-        self#line_directive ~forcefile:true fmt l;
+        line_directive ~forcefile:true "GVar" fmt l;
         Format.fprintf fmt "@[<hov 2>";
         self#in_ghost_if_needed fmt vi.vghost ~post_fmt:"@ %t" ~block:false
           (fun () ->
@@ -1668,13 +1682,14 @@ class cil_printer () = object (self)
 
         (* print global variable 'extern' declarations *)
       | GVarDecl (vi, l) ->
-        self#line_directive fmt l;
+        line_directive "GVarDecl" fmt l;
         fprintf fmt "%a@\n@\n" self#vdecl_complete vi
 
       (* print function prototypes *)
       | GFunDecl (funspec, vi, l) ->
         self#in_current_function vi;
         self#opt_funspec fmt funspec;
+        line_directive0 "GFunDecl" fmt l;
         if not state.print_cil_as_is && Cil.Builtin_functions.mem vi.vname
         then begin
           (* Compiler builtins need no prototypes. Just print them in
@@ -1688,7 +1703,7 @@ class cil_printer () = object (self)
         self#out_current_function
 
       | GAsm (s, l) ->
-        self#line_directive fmt l;
+        line_directive "GAsm" fmt l;
         fprintf fmt "__asm__(\"%s\");@\n" (Escape.escape_string s)
 
       | GPragma (Attr(an, args), l) ->
@@ -1704,7 +1719,7 @@ class cil_printer () = object (self)
               || an = "merger"
               || an = "cilnoremove")
         in
-        self#line_directive fmt l;
+        line_directive "GPragma" fmt l;
         if suppress then fprintf fmt "/* ";
         fprintf fmt "#pragma ";
         begin
@@ -1730,7 +1745,7 @@ class cil_printer () = object (self)
 
       | GAnnot (decl,l) ->
         (* attributes are purely internal. *)
-        self#line_directive fmt l;
+        line_directive "GAnnot" fmt l;
         fprintf fmt "%t@ %a@ %t@\n"
           (fun fmt -> self#pp_open_annotation ~block:false fmt)
           self#global_annotation decl
